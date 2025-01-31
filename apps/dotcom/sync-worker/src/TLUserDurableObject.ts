@@ -24,10 +24,9 @@ import { type TLPostgresReplicator } from './TLPostgresReplicator'
 import { Analytics, Environment, TLUserDurableObjectEvent } from './types'
 import { UserDataSyncer, ZReplicationEvent } from './UserDataSyncer'
 import { EventData, writeDataPoint } from './utils/analytics'
-import { getReplicator } from './utils/durableObjects'
+import { getReplicator, getRoomDurableObject } from './utils/durableObjects'
 import { isRateLimited } from './utils/rateLimit'
 import { retryOnConnectionFailure } from './utils/retryOnConnectionFailure'
-import { getCurrentSerializedRoomSnapshot } from './utils/tla/getCurrentSerializedRoomSnapshot'
 
 export class TLUserDurableObject extends DurableObject<Environment> {
 	private readonly db: Kysely<DB>
@@ -125,6 +124,7 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 
 	private assertCache(): asserts this is { cache: UserDataSyncer } {
 		assert(this.cache, 'no cache')
+		this.cache.maybeStartInterval()
 	}
 
 	private readonly sockets = new Set<WebSocket>()
@@ -141,6 +141,12 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 			) {
 				this.sockets.delete(socket)
 			}
+		}
+	}
+
+	maybeClose() {
+		if (this.sockets.size === 0) {
+			this.cache?.stopInterval()
 		}
 	}
 
@@ -168,13 +174,17 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 			return new Response(null, { status: 101, webSocket: clientWebSocket })
 		}
 
-		serverWebSocket.addEventListener('message', (e) => this.handleSocketMessage(e.data.toString()))
+		serverWebSocket.addEventListener('message', (e) =>
+			this.handleSocketMessage(serverWebSocket, e.data.toString())
+		)
 		serverWebSocket.addEventListener('close', () => {
 			this.sockets.delete(serverWebSocket)
+			this.maybeClose()
 		})
 		serverWebSocket.addEventListener('error', (e) => {
 			this.captureException(e, { source: 'serverWebSocket "error" event' })
 			this.sockets.delete(serverWebSocket)
+			this.maybeClose()
 		})
 		const initialData = this.cache.store.getCommittedData()
 		assert(initialData, 'Initial data not fetched')
@@ -191,7 +201,7 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 		return new Response(null, { status: 101, webSocket: clientWebSocket })
 	}
 
-	private async handleSocketMessage(message: string) {
+	private async handleSocketMessage(socket: WebSocket, message: string) {
 		const rateLimited = await isRateLimited(this.env, this.userId!)
 		this.assertCache()
 		await this.cache.waitUntilConnected()
@@ -201,10 +211,10 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 			case 'mutate':
 				if (rateLimited) {
 					this.logEvent({ type: 'rate_limited', id: this.userId! })
-					await this.rejectMutation(msg.mutationId, ZErrorCode.rate_limit_exceeded)
+					await this.rejectMutation(socket, msg.mutationId, ZErrorCode.rate_limit_exceeded)
 				} else {
 					this.logEvent({ type: 'mutation', id: this.userId! })
-					await this.handleMutate(msg)
+					await this.handleMutate(socket, msg)
 				}
 				break
 			default:
@@ -212,16 +222,18 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 		}
 	}
 
-	private async rejectMutation(mutationId: string, errorCode: ZErrorCode) {
+	private async rejectMutation(socket: WebSocket, mutationId: string, errorCode: ZErrorCode) {
 		this.assertCache()
 		this.logEvent({ type: 'reject_mutation', id: this.userId! })
 		await this.cache.waitUntilConnected()
 		this.cache.store.rejectMutation(mutationId)
-		this.broadcast({
-			type: 'reject',
-			mutationId,
-			errorCode,
-		} satisfies ZServerSentMessage)
+		socket?.send(
+			JSON.stringify({
+				type: 'reject',
+				mutationId,
+				errorCode,
+			} satisfies ZServerSentMessage)
+		)
 	}
 
 	private async assertValidMutation(update: ZRowUpdate) {
@@ -378,7 +390,7 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 		})
 	}
 
-	private async handleMutate(msg: ZClientSentMessage) {
+	private async handleMutate(socket: WebSocket, msg: ZClientSentMessage) {
 		this.assertCache()
 		try {
 			// we connect to pg via a pooler, so in the case that the pool is exhausted
@@ -415,7 +427,11 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 						`mutation number did not increment mutationNumber: ${mutationNumber} current: ${currentMutationNumber}`
 					)
 					this.log.debug('pushing mutation to cache', this.userId, mutationNumber)
-					this.cache.mutations.push({ mutationNumber, mutationId: msg.mutationId })
+					this.cache.mutations.push({
+						mutationNumber,
+						mutationId: msg.mutationId,
+						timestamp: Date.now(),
+					})
 				})
 				.catch((e) => {
 					this.cache.mutations = this.cache.mutations.filter((m) => m.mutationId !== msg.mutationId)
@@ -427,7 +443,7 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 				errorCode: code,
 				reason: e.cause ?? e.message ?? e.stack ?? JSON.stringify(e),
 			})
-			await this.rejectMutation(msg.mutationId, code)
+			await this.rejectMutation(socket, msg.mutationId, code)
 		}
 	}
 
@@ -484,7 +500,15 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 		}
 
 		try {
-			const serializedSnapshot = await getCurrentSerializedRoomSnapshot(file.id, this.env)
+			// make sure the room's snapshot is up to date
+			await getRoomDurableObject(this.env, file.id).awaitPersist()
+			// and that it exists
+			const snapshot = await this.env.ROOMS.get(getR2KeyForRoom({ slug: file.id, isApp: true }))
+
+			if (!snapshot) {
+				throw new Error('Snapshot not found')
+			}
+			const blob = await snapshot.blob()
 
 			// Create a new slug for the published room
 			await this.env.SNAPSHOT_SLUG_TO_PARENT_SLUG.put(file.publishedSlug, file.id)
@@ -492,12 +516,12 @@ export class TLUserDurableObject extends DurableObject<Environment> {
 			// Bang the snapshot into the database
 			await this.env.ROOM_SNAPSHOTS.put(
 				getR2KeyForRoom({ slug: `${file.id}/${file.publishedSlug}`, isApp: true }),
-				serializedSnapshot
+				blob
 			)
 			const currentTime = new Date().toISOString()
 			await this.env.ROOM_SNAPSHOTS.put(
 				getR2KeyForRoom({ slug: `${file.id}/${file.publishedSlug}|${currentTime}`, isApp: true }),
-				serializedSnapshot
+				blob
 			)
 		} catch (e) {
 			throw new ZMutationError(ZErrorCode.publish_failed, 'Failed to publish snapshot', e)

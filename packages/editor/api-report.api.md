@@ -74,6 +74,7 @@ import { TLPropsMigrations } from '@tldraw/tlschema';
 import { TLRecord } from '@tldraw/tlschema';
 import { TLScribble } from '@tldraw/tlschema';
 import { TLShape } from '@tldraw/tlschema';
+import { TLShapeCrop } from '@tldraw/tlschema';
 import { TLShapeId } from '@tldraw/tlschema';
 import { TLShapePartial } from '@tldraw/tlschema';
 import { TLStore } from '@tldraw/tlschema';
@@ -415,6 +416,16 @@ export type BoxLike = Box | BoxModel;
 // @public (undocumented)
 export function canonicalizeRotation(a: number): number;
 
+// @internal (undocumented)
+export interface CanvasMaxSize {
+    // (undocumented)
+    maxArea: number;
+    // (undocumented)
+    maxHeight: number;
+    // (undocumented)
+    maxWidth: number;
+}
+
 // @public
 export function centerOfCircleFromThreePoints(a: VecLike, b: VecLike, c: VecLike): null | Vec;
 
@@ -461,6 +472,9 @@ export function clamp(n: number, min: number, max: number): number;
 
 // @public
 export function clampRadians(r: number): number;
+
+// @internal (undocumented)
+export function clampToBrowserMaxCanvasSize(width: number, height: number): Promise<number[]>;
 
 // @public (undocumented)
 export class ClickManager {
@@ -733,6 +747,7 @@ export const defaultTldrawOptions: {
     readonly maxPointsPerDrawShape: 500;
     readonly maxShapesPerPage: 4000;
     readonly multiClickDurationMs: 200;
+    readonly noteShapeResizeMode: "none";
     readonly temporaryAssetPreviewLifetimeMs: 180000;
     readonly textShadowLod: 0.35;
 };
@@ -883,14 +898,236 @@ export class Editor extends EventEmitter<TLEventMap> {
     // @internal (undocumented)
     createErrorAnnotations(origin: string, willCrashApp: 'unknown' | boolean): {
         extras: {
-            activeStateNode?: string;
-            editingShape?: TLUnknownShape;
-            inputs?: Record<string, unknown>;
-            selectedShapes?: TLUnknownShape[];
+            activeStateNode: string;
+            collaboratorCount: number;
+            editingShape: TLUnknownShape | undefined;
+            inputs: {
+                buttons: Set<number>;
+                keys: Set<string>;
+                originScreenPoint: Vec;
+                originPagePoint: Vec;
+                currentScreenPoint: Vec;
+                currentPagePoint: Vec;
+                previousScreenPoint: Vec;
+                previousPagePoint: Vec;
+                pointerVelocity: Vec;
+                altKey: boolean;
+                ctrlKey: boolean;
+                isPen: boolean;
+                metaKey: boolean;
+                shiftKey: boolean;
+                isDragging: boolean;
+                isEditing: boolean;
+                isPanning: boolean;
+                isPinching: boolean;
+                isPointing: boolean;
+                isSpacebarPanning: boolean;
+            };
+            instanceState: TLInstance;
+            pageState: TLInstancePageState;
+            selectedShapes: ({
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "arrow";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "bookmark";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "draw";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "embed";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "frame";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "geo";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "group";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "highlight";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "image";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "line";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "note";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "text";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: "video";
+                typeName: "shape";
+                x: number;
+                y: number;
+            } | {
+                id: TLShapeId;
+                index: IndexKey;
+                isLocked: boolean;
+                meta: JsonObject;
+                opacity: number;
+                parentId: TLParentId;
+                props: any;
+                rotation: number;
+                type: string;
+                typeName: "shape";
+                x: number;
+                y: number;
+            })[];
+            selectionCount: number;
         };
         tags: {
             origin: string;
-            willCrashApp: 'unknown' | boolean;
+            willCrashApp: "unknown" | boolean;
+        };
+    } | {
+        extras: {
+            activeStateNode?: undefined;
+            collaboratorCount?: undefined;
+            editingShape?: undefined;
+            inputs?: undefined;
+            instanceState?: undefined;
+            pageState?: undefined;
+            selectedShapes?: undefined;
+            selectionCount?: undefined;
+        };
+        tags: {
+            origin: string;
+            willCrashApp: "unknown" | boolean;
         };
     };
     createPage(page: Partial<TLPage>): this;
@@ -933,8 +1170,8 @@ export class Editor extends EventEmitter<TLEventMap> {
     };
     // @internal (undocumented)
     externalAssetContentHandlers: {
-        [K in TLExternalAssetContent['type']]: {
-            [Key in K]: ((info: TLExternalAssetContent & {
+        [K in TLExternalAsset['type']]: {
+            [Key in K]: ((info: TLExternalAsset & {
                 type: Key;
             }) => Promise<TLAsset | undefined>) | null;
         }[K];
@@ -957,7 +1194,7 @@ export class Editor extends EventEmitter<TLEventMap> {
     }): this;
     getAncestorPageId(shape?: TLShape | TLShapeId): TLPageId | undefined;
     getAsset<T extends TLAsset>(asset: T | T['id']): T | undefined;
-    getAssetForExternalContent(info: TLExternalAssetContent): Promise<TLAsset | undefined>;
+    getAssetForExternalContent(info: TLExternalAsset): Promise<TLAsset | undefined>;
     getAssets(): (TLBookmarkAsset | TLImageAsset | TLVideoAsset)[];
     getBaseZoom(): number;
     getBinding(id: TLBindingId): TLBinding | undefined;
@@ -1089,13 +1326,13 @@ export class Editor extends EventEmitter<TLEventMap> {
     getStateDescendant<T extends StateNode>(path: string): T | undefined;
     getStyleForNextShape<T>(style: StyleProp<T>): T;
     // @deprecated (undocumented)
-    getSvg(shapes: TLShape[] | TLShapeId[], opts?: TLImageExportOptions): Promise<SVGSVGElement | undefined>;
-    getSvgElement(shapes: TLShape[] | TLShapeId[], opts?: TLImageExportOptions): Promise<{
+    getSvg(shapes: TLShape[] | TLShapeId[], opts?: TLSvgExportOptions): Promise<SVGSVGElement | undefined>;
+    getSvgElement(shapes: TLShape[] | TLShapeId[], opts?: TLSvgExportOptions): Promise<{
         height: number;
         svg: SVGSVGElement;
         width: number;
     } | undefined>;
-    getSvgString(shapes: TLShape[] | TLShapeId[], opts?: TLImageExportOptions): Promise<{
+    getSvgString(shapes: TLShape[] | TLShapeId[], opts?: TLSvgExportOptions): Promise<{
         height: number;
         svg: string;
         width: number;
@@ -1118,7 +1355,12 @@ export class Editor extends EventEmitter<TLEventMap> {
     }>): this;
     hasAncestor(shape: TLShape | TLShapeId | undefined, ancestorId: TLShapeId): boolean;
     // (undocumented)
-    hasExternalAssetHandler(type: TLExternalAssetContent['type']): boolean;
+    hasExternalAssetHandler(type: TLExternalAsset['type']): boolean;
+    hasShapeUtil<S extends TLUnknownShape>(shape: S | TLShapePartial<S>): boolean;
+    // (undocumented)
+    hasShapeUtil<S extends TLUnknownShape>(type: S['type']): boolean;
+    // (undocumented)
+    hasShapeUtil<T extends ShapeUtil>(type: T extends ShapeUtil<infer R> ? R['type'] : string): boolean;
     protected readonly history: HistoryManager<TLRecord>;
     inputs: {
         buttons: Set<number>;
@@ -1195,7 +1437,7 @@ export class Editor extends EventEmitter<TLEventMap> {
     putExternalContent<E>(info: TLExternalContent<E>): Promise<void>;
     redo(): this;
     registerDeepLinkListener(opts?: TLDeepLinkOptions): () => void;
-    registerExternalAssetHandler<T extends TLExternalAssetContent['type']>(type: T, handler: ((info: TLExternalAssetContent & {
+    registerExternalAssetHandler<T extends TLExternalAsset['type']>(type: T, handler: ((info: TLExternalAsset & {
         type: T;
     }) => Promise<TLAsset>) | null): this;
     registerExternalContentHandler<T extends TLExternalContent<E>['type'], E>(type: T, handler: ((info: T extends TLExternalContent<E>['type'] ? TLExternalContent<E> & {
@@ -1209,6 +1451,7 @@ export class Editor extends EventEmitter<TLEventMap> {
     resolveAssetsInContent(content: TLContent | undefined): Promise<TLContent | undefined>;
     // (undocumented)
     resolveAssetUrl(assetId: null | TLAssetId, context: {
+        dpr?: number;
         screenScale?: number;
         shouldResolveToOriginal?: boolean;
     }): Promise<null | string>;
@@ -1283,6 +1526,11 @@ export class Editor extends EventEmitter<TLEventMap> {
         setTimeout: (handler: TimerHandler, timeout?: number | undefined, ...args: any[]) => number;
     };
     toggleLock(shapes: TLShape[] | TLShapeId[]): this;
+    toImage(shapes: TLShape[] | TLShapeId[], opts?: TLImageExportOptions): Promise<{
+        blob: Blob;
+        height: number;
+        width: number;
+    }>;
     undo(): this;
     ungroupShapes(ids: TLShapeId[], opts?: Partial<{
         select: boolean;
@@ -1307,7 +1555,10 @@ export class Editor extends EventEmitter<TLEventMap> {
     // @internal (undocumented)
     _updateShapes(_partials: (null | TLShapePartial | undefined)[]): void;
     updateViewportScreenBounds(screenBounds: Box | HTMLElement, center?: boolean): this;
-    uploadAsset(asset: TLAsset, file: File, abortSignal?: AbortSignal): Promise<string>;
+    uploadAsset(asset: TLAsset, file: File, abortSignal?: AbortSignal): Promise<{
+        meta?: JsonObject;
+        src: string;
+    }>;
     readonly user: UserPreferencesManager;
     visitDescendants(parent: TLPage | TLParentId | TLShape, visitor: (id: TLShapeId) => false | void): this;
     zoomIn(point?: Vec, opts?: TLCameraMoveOptions): this;
@@ -1537,6 +1788,15 @@ export function getRotationSnapshot({ editor, ids, }: {
 
 // @public (undocumented)
 export function getSnapshot(store: TLStore): TLEditorSnapshot;
+
+// @public (undocumented)
+export function getSvgAsImage(svgString: string, options: {
+    height: number;
+    pixelRatio?: number;
+    quality?: number;
+    type: 'jpeg' | 'png' | 'webp';
+    width: number;
+}): Promise<Blob | null>;
 
 // @public
 export function getSvgPathFromPoints(points: VecLike[], closed?: boolean): string;
@@ -2148,6 +2408,17 @@ export interface ResizeBoxOptions {
     minWidth?: number;
 }
 
+// @public
+export function resizeScaled(shape: TLBaseShape<any, {
+    scale: number;
+}>, { initialBounds, scaleX, scaleY, newPoint, handle }: TLResizeInfo<any>): {
+    props: {
+        scale: number;
+    };
+    x: number;
+    y: number;
+};
+
 // @public (undocumented)
 export const ROTATE_CORNER_TO_SELECTION_CORNER: {
     readonly bottom_left_rotate: "bottom_left";
@@ -2270,6 +2541,7 @@ export abstract class ShapeUtil<Shape extends TLUnknownShape = TLUnknownShape> {
     onBindingChange?(shape: Shape): TLShapePartial<Shape> | void;
     onChildrenChange?(shape: Shape): TLShapePartial[] | void;
     onClick?(shape: Shape): TLShapePartial<Shape> | void;
+    onCrop?(shape: Shape, info: TLCropInfo<Shape>): Omit<TLShapePartial<Shape>, 'id' | 'type'> | undefined | void;
     onDoubleClick?(shape: Shape): TLShapePartial<Shape> | void;
     onDoubleClickEdge?(shape: Shape): TLShapePartial<Shape> | void;
     onDoubleClickHandle?(shape: Shape, handle: TLHandle): TLShapePartial<Shape> | void;
@@ -2499,6 +2771,9 @@ export type SVGContainerProps = React_3.ComponentProps<'svg'>;
 export interface SvgExportContext {
     addExportDef(def: SvgExportDef): void;
     readonly isDarkMode: boolean;
+    readonly pixelRatio: null | number;
+    resolveAssetUrl(assetId: TLAssetId, width: number): Promise<null | string>;
+    readonly scale: number;
     waitUntil(promise: Promise<void>): void;
 }
 
@@ -2584,6 +2859,14 @@ export interface TLBaseEventInfo {
     shiftKey: boolean;
     // (undocumented)
     type: UiEventType;
+}
+
+// @public (undocumented)
+export interface TLBaseExternalContent {
+    // (undocumented)
+    point?: VecLike;
+    // (undocumented)
+    sources?: TLExternalContentSource[];
 }
 
 // @public (undocumented)
@@ -2717,6 +3000,23 @@ export interface TLContent {
     schema: SerializedSchema;
     // (undocumented)
     shapes: TLShape[];
+}
+
+// @public
+export interface TLCropInfo<T extends TLShape> {
+    // (undocumented)
+    change: Vec;
+    // (undocumented)
+    crop: TLShapeCrop;
+    // (undocumented)
+    handle: SelectionHandle;
+    // (undocumented)
+    initialShape: T;
+    // (undocumented)
+    uncroppedSize: {
+        h: number;
+        w: number;
+    };
 }
 
 // @public (undocumented)
@@ -2877,6 +3177,7 @@ export interface TldrawOptions {
     readonly maxShapesPerPage: number;
     // (undocumented)
     readonly multiClickDurationMs: number;
+    readonly noteShapeResizeMode: 'none' | 'scale';
     readonly temporaryAssetPreviewLifetimeMs: number;
     // (undocumented)
     readonly textShadowLod: number;
@@ -2974,6 +3275,16 @@ export interface TLEditorSnapshot {
 }
 
 // @public (undocumented)
+export interface TLEmbedExternalContent<EmbedDefinition> extends TLBaseExternalContent {
+    // (undocumented)
+    embed: EmbedDefinition;
+    // (undocumented)
+    type: 'embed';
+    // (undocumented)
+    url: string;
+}
+
+// @public (undocumented)
 export type TLEnterEventHandler = (info: any, from: string) => void;
 
 // @public
@@ -2995,6 +3306,16 @@ export interface TLErrorBoundaryProps {
     fallback: TLErrorFallbackComponent;
     // (undocumented)
     onError?: ((error: unknown) => void) | null;
+}
+
+// @public (undocumented)
+export interface TLErrorExternalContentSource {
+    // (undocumented)
+    data: null | string;
+    // (undocumented)
+    reason: string;
+    // (undocumented)
+    type: 'error';
 }
 
 // @public (undocumented)
@@ -3047,6 +3368,8 @@ export type TLEventInfo = TLCancelEventInfo | TLClickEventInfo | TLCompleteEvent
 // @public (undocumented)
 export interface TLEventMap {
     // (undocumented)
+    'before-event': [TLEventInfo];
+    // (undocumented)
     'max-shapes': [{
         count: number;
         name: string;
@@ -3085,57 +3408,47 @@ export type TLEventMapHandler<T extends keyof TLEventMap> = (...args: TLEventMap
 export type TLEventName = 'cancel' | 'complete' | 'interrupt' | 'tick' | 'wheel' | TLCLickEventName | TLKeyboardEventName | TLPinchEventName | TLPointerEventName;
 
 // @public (undocumented)
+export interface TLExcalidrawExternalContentSource {
+    // (undocumented)
+    data: any;
+    // (undocumented)
+    type: 'excalidraw';
+}
+
+// @public (undocumented)
 export type TLExitEventHandler = (info: any, to: string) => void;
 
 // @public (undocumented)
-export type TLExternalAssetContent = {
+export type TLExportType = 'jpeg' | 'png' | 'svg' | 'webp';
+
+// @public (undocumented)
+export type TLExternalAsset = TLFileExternalAsset | TLUrlExternalAsset;
+
+// @public (undocumented)
+export type TLExternalContent<EmbedDefinition> = TLEmbedExternalContent<EmbedDefinition> | TLFilesExternalContent | TLSvgTextExternalContent | TLTextExternalContent | TLUrlExternalContent;
+
+// @public (undocumented)
+export type TLExternalContentSource = TLErrorExternalContentSource | TLExcalidrawExternalContentSource | TLTextExternalContentSource | TLTldrawExternalContentSource;
+
+// @public (undocumented)
+export interface TLFileExternalAsset {
+    // (undocumented)
     assetId?: TLAssetId;
+    // (undocumented)
     file: File;
+    // (undocumented)
     type: 'file';
-} | {
-    type: 'url';
-    url: string;
-};
+}
 
 // @public (undocumented)
-export type TLExternalContent<EmbedDefinition> = {
-    point?: VecLike;
-    sources?: TLExternalContentSource[];
-} & ({
-    embed: EmbedDefinition;
-    type: 'embed';
-    url: string;
-} | {
+export interface TLFilesExternalContent extends TLBaseExternalContent {
+    // (undocumented)
     files: File[];
+    // (undocumented)
     ignoreParent: boolean;
+    // (undocumented)
     type: 'files';
-} | {
-    text: string;
-    type: 'svg-text';
-} | {
-    text: string;
-    type: 'text';
-} | {
-    type: 'url';
-    url: string;
-});
-
-// @public (undocumented)
-export type TLExternalContentSource = {
-    data: any;
-    type: 'excalidraw';
-} | {
-    data: null | string;
-    reason: string;
-    type: 'error';
-} | {
-    data: string;
-    subtype: 'html' | 'json' | 'text' | 'url';
-    type: 'text';
-} | {
-    data: TLContent;
-    type: 'tldraw';
-};
+}
 
 // @public (undocumented)
 export interface TLGridProps {
@@ -3204,23 +3517,9 @@ export interface TLHistoryMark {
 }
 
 // @public (undocumented)
-export interface TLImageExportOptions {
-    // (undocumented)
-    background?: boolean;
-    // (undocumented)
-    bounds?: Box;
-    // (undocumented)
-    darkMode?: boolean;
-    // (undocumented)
-    padding?: number;
-    // (undocumented)
-    pixelRatio?: number;
-    // (undocumented)
-    preserveAspectRatio?: React.SVGAttributes<SVGSVGElement>['preserveAspectRatio'];
-    // (undocumented)
+export interface TLImageExportOptions extends TLSvgExportOptions {
+    format?: TLExportType;
     quality?: number;
-    // (undocumented)
-    scale?: number;
 }
 
 // @public (undocumented)
@@ -3615,8 +3914,45 @@ export type TLStoreWithStatus = {
     readonly store: TLStore;
 };
 
+// @public (undocumented)
+export interface TLSvgExportOptions {
+    background?: boolean;
+    bounds?: Box;
+    darkMode?: boolean;
+    padding?: number;
+    pixelRatio?: number;
+    preserveAspectRatio?: React.SVGAttributes<SVGSVGElement>['preserveAspectRatio'];
+    scale?: number;
+}
+
 // @public @deprecated (undocumented)
 export type TLSvgOptions = TLImageExportOptions;
+
+// @public (undocumented)
+export interface TLSvgTextExternalContent extends TLBaseExternalContent {
+    // (undocumented)
+    text: string;
+    // (undocumented)
+    type: 'svg-text';
+}
+
+// @public (undocumented)
+export interface TLTextExternalContent extends TLBaseExternalContent {
+    // (undocumented)
+    text: string;
+    // (undocumented)
+    type: 'text';
+}
+
+// @public (undocumented)
+export interface TLTextExternalContentSource {
+    // (undocumented)
+    data: string;
+    // (undocumented)
+    subtype: 'html' | 'json' | 'text' | 'url';
+    // (undocumented)
+    type: 'text';
+}
 
 // @public (undocumented)
 export type TLTickEvent = (info: TLTickEventInfo) => void;
@@ -3633,6 +3969,30 @@ export interface TLTickEventInfo {
 
 // @public
 export const tltime: Timers;
+
+// @public (undocumented)
+export interface TLTldrawExternalContentSource {
+    // (undocumented)
+    data: TLContent;
+    // (undocumented)
+    type: 'tldraw';
+}
+
+// @public (undocumented)
+export interface TLUrlExternalAsset {
+    // (undocumented)
+    type: 'url';
+    // (undocumented)
+    url: string;
+}
+
+// @public (undocumented)
+export interface TLUrlExternalContent extends TLBaseExternalContent {
+    // (undocumented)
+    type: 'url';
+    // (undocumented)
+    url: string;
+}
 
 // @public (undocumented)
 export interface TLUser {

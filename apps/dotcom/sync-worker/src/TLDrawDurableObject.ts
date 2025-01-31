@@ -21,7 +21,13 @@ import {
 	type PersistedRoomSnapshotForSupabase,
 } from '@tldraw/sync-core'
 import { TLDOCUMENT_ID, TLDocument, TLRecord, createTLSchema } from '@tldraw/tlschema'
-import { ExecutionQueue, assert, assertExists, exhaustiveSwitchError } from '@tldraw/utils'
+import {
+	ExecutionQueue,
+	assert,
+	assertExists,
+	exhaustiveSwitchError,
+	uniqueId,
+} from '@tldraw/utils'
 import { createSentry } from '@tldraw/worker-shared'
 import { DurableObject } from 'cloudflare:workers'
 import { IRequest, Router } from 'itty-router'
@@ -33,10 +39,11 @@ import { getR2KeyForRoom } from './r2'
 import { Analytics, DBLoadResult, Environment, TLServerEvent } from './types'
 import { EventData, writeDataPoint } from './utils/analytics'
 import { createSupabaseClient } from './utils/createSupabaseClient'
+import { getRoomDurableObject } from './utils/durableObjects'
 import { isRateLimited } from './utils/rateLimit'
 import { getSlug } from './utils/roomOpenMode'
 import { throttle } from './utils/throttle'
-import { getAuth } from './utils/tla/getAuth'
+import { getAuthFromSearchParams } from './utils/tla/getAuth'
 
 const MAX_CONNECTIONS = 50
 
@@ -121,6 +128,8 @@ export class TLDrawDurableObject extends DurableObject {
 						})
 
 						this.logEvent({ type: 'room', roomId: slug, name: 'room_start' })
+						// Also associate file assets after we load the room
+						setTimeout(this.maybeAssociateFileAssets.bind(this), PERSIST_INTERVAL_MS)
 						return room
 					}
 					case 'room_not_found': {
@@ -240,7 +249,7 @@ export class TLDrawDurableObject extends DurableObject {
 		)
 		const isApp = new URL(req.url).pathname.startsWith('/app/')
 		const appMode = isApp
-			? (new URL(req.url).searchParams.get('mode') as TlaFileOpenMode) ?? null
+			? ((new URL(req.url).searchParams.get('mode') as TlaFileOpenMode) ?? null)
 			: null
 
 		const duplicateId = isApp ? new URL(req.url).searchParams.get('duplicateId') : null
@@ -296,6 +305,7 @@ export class TLDrawDurableObject extends DurableObject {
 
 			const snapshot: RoomSnapshot = JSON.parse(dataText)
 			room.loadSnapshot(snapshot)
+			this.maybeAssociateFileAssets()
 
 			return new Response()
 		} finally {
@@ -345,7 +355,7 @@ export class TLDrawDurableObject extends DurableObject {
 			return closeSocket(TLSyncErrorCloseEventReason.NOT_FOUND)
 		}
 
-		const auth = await getAuth(req, this.env)
+		const auth = await getAuthFromSearchParams(req, this.env)
 		if (this.documentInfo.isApp) {
 			openMode = ROOM_OPEN_MODE.READ_WRITE
 			const file = await this.getAppFileRecord()
@@ -509,17 +519,10 @@ export class TLDrawDurableObject extends DurableObject {
 			if (this.documentInfo.appMode === 'duplicate') {
 				assert(this.documentInfo.duplicateId, 'duplicateId must be present')
 				// load the duplicate id
-				let data: string | undefined = undefined
-				try {
-					const otherRoom = this.env.TLDR_DOC.get(
-						this.env.TLDR_DOC.idFromName(`/${ROOM_PREFIX}/${this.documentInfo.duplicateId}`)
-					) as any as TLDrawDurableObject
-					data = await otherRoom.getCurrentSerializedSnapshot()
-				} catch (_e) {
-					data = await this.r2.rooms
-						.get(getR2KeyForRoom({ slug: this.documentInfo.duplicateId, isApp: true }))
-						.then((r) => r?.text())
-				}
+				await getRoomDurableObject(this.env, this.documentInfo.duplicateId).awaitPersist()
+				const data = await this.r2.rooms
+					.get(getR2KeyForRoom({ slug: this.documentInfo.duplicateId, isApp: true }))
+					.then((r) => r?.text())
 
 				if (!data) {
 					return { type: 'room_not_found' }
@@ -573,6 +576,57 @@ export class TLDrawDurableObject extends DurableObject {
 
 	executionQueue = new ExecutionQueue()
 
+	// We use this to make sure that all of the assets in a tldraw app file are associated with that file.
+	// This is needed for a few cases like duplicating a file, copy pasting images between files, slurping legacy files.
+	async maybeAssociateFileAssets() {
+		if (!this.documentInfo.isApp) return
+
+		const slug = this.documentInfo.slug
+		const room = await this.getRoom()
+		const assetsToUpdate: { objectName: string; fileId: string }[] = []
+		await room.updateStore(async (store) => {
+			const records = store.getAll()
+			for (const record of records) {
+				if (record.typeName !== 'asset') continue
+				const asset = record as any
+				const meta = asset.meta
+
+				if (meta?.fileId === slug) continue
+				const src = asset.props.src
+				if (!src) continue
+				const objectName = src.split('/').pop()
+				if (!objectName) continue
+				const currentAsset = await this.env.UPLOADS.get(objectName)
+				if (!currentAsset) continue
+
+				const split = objectName.split('-')
+				const fileType = split.length > 1 ? split.pop() : null
+				const id = uniqueId()
+				const newObjectName = fileType ? `${id}-${fileType}` : id
+				await this.env.UPLOADS.put(newObjectName, currentAsset.body, {
+					httpMetadata: currentAsset.httpMetadata,
+				})
+				asset.props.src = asset.props.src.replace(objectName, newObjectName)
+				assert(this.env.MULTIPLAYER_SERVER, 'MULTIPLAYER_SERVER must be present')
+				asset.props.src = `${this.env.MULTIPLAYER_SERVER.replace(/^ws/, 'http')}/api/app/uploads/${newObjectName}`
+
+				asset.meta.fileId = slug
+				store.put(asset)
+				assetsToUpdate.push({ objectName: newObjectName, fileId: slug })
+			}
+		})
+
+		if (assetsToUpdate.length === 0) return
+
+		await this.db
+			.insertInto('asset')
+			.values(assetsToUpdate)
+			.onConflict((oc) => {
+				return oc.column('objectName').doUpdateSet({ fileId: slug })
+			})
+			.execute()
+	}
+
 	// Save the room to r2
 	async persistToDatabase() {
 		try {
@@ -586,6 +640,7 @@ export class TLDrawDurableObject extends DurableObject {
 				if (this._isRestoring) return
 
 				const snapshot = JSON.stringify(room.getCurrentSnapshot())
+				this.maybeAssociateFileAssets()
 
 				const key = getR2KeyForRoom({ slug: slug, isApp: this.documentInfo.isApp })
 				await Promise.all([
@@ -596,11 +651,16 @@ export class TLDrawDurableObject extends DurableObject {
 
 				// Update the updatedAt timestamp in the database
 				if (this.documentInfo.isApp) {
-					await this.db
+					// don't await on this because otherwise
+					// if this logic is invoked during another db transaction
+					// (e.g. when publishing a file)
+					// that transaction will deadlock
+					this.db
 						.updateTable('file')
 						.set({ updatedAt: new Date().getTime() })
 						.where('id', '=', this.documentInfo.slug)
 						.execute()
+						.catch((e) => this.reportError(e))
 				}
 			})
 		} catch (e) {
@@ -708,8 +768,8 @@ export class TLDrawDurableObject extends DurableObject {
 	/**
 	 * @internal
 	 */
-	async getCurrentSerializedSnapshot() {
-		const room = await this.getRoom()
-		return room.getCurrentSerializedSnapshot()
+	async awaitPersist() {
+		if (!this._documentInfo) return
+		await this.persistToDatabase()
 	}
 }
